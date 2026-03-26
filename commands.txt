@@ -1,0 +1,218 @@
+Isaac ROS + RealSense Command Reference
+=======================================
+
+Paths used on this machine
+--------------------------
+Host RealSense workspace:
+  /home/$USER/ros2_ws
+
+Isaac ROS workspace:
+  /home/$USER/workspaces/isaac_ros-dev
+
+
+0) Start Isaac ROS dev container
+--------------------------------
+Run this on the host in a new terminal:
+
+export ISAAC_ROS_WS=/home/$USER/workspaces/isaac_ros-dev
+cd ${ISAAC_ROS_WS}/src/isaac_ros_common
+./scripts/run_dev.sh -d ${ISAAC_ROS_WS}
+
+Inside the container, source the workspace before running Isaac ROS / custom packages:
+
+cd /workspaces/isaac_ros-dev
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+
+1) Run both cameras and check output in RViz2
+--------------------------------------------
+Open a host terminal for the camera drivers:
+
+cd /home/$USER/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+Start D405 in terminal 1:
+
+ros2 run realsense2_camera realsense2_camera_node --ros-args \
+  -r __ns:=/d405 \
+  -p camera_name:=d405 \
+  -p serial_no:=_335122272856 \
+  -p enable_color:=true \
+  -p enable_depth:=true \
+  -p enable_infra1:=false \
+  -p enable_infra2:=false \
+  -p pointcloud.enable:=false \
+  -p align_depth.enable:=false \
+  -p rgb_camera.color_profile:="640x480x60" \
+  -p depth_module.depth_profile:="640x480x60"
+
+Start D435i in terminal 2:
+
+ros2 run realsense2_camera realsense2_camera_node --ros-args \
+  -r __ns:=/d435i \
+  -p camera_name:=d435i \
+  -p serial_no:=_419622072439 \
+  -p enable_color:=true \
+  -p enable_depth:=true \
+  -p enable_infra1:=false \
+  -p enable_infra2:=false \
+  -p enable_gyro:=false \
+  -p enable_accel:=false \
+  -p pointcloud.enable:=false \
+  -p align_depth.enable:=false \
+  -p rgb_camera.color_profile:="640x480x60" \
+  -p depth_module.depth_profile:="640x480x60"
+
+Open RViz2 in terminal 3:
+
+cd /home/$USER/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+rviz2
+
+Useful topics to add in RViz2:
+  /d405/camera/color/image_raw
+  /d405/camera/depth/image_rect_raw
+  /d435i/camera/color/image_raw
+  /d435i/camera/depth/image_rect_raw
+
+Quick topic check:
+
+ros2 topic list | grep -E 'd405|d435i'
+
+
+2) Run the benchmarks
+---------------------
+Benchmark commands can be run inside the Isaac ROS container after sourcing:
+
+cd /workspaces/isaac_ros-dev
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+Live benchmark window on D435i depth:
+
+ros2 run realsense_benchmark live_benchmark_node --ros-args \
+  -p depth_topic:=/d435i/camera/depth/image_rect_raw \
+  -p mode:=depth \
+  -p cpu_loops:=0
+
+Run camera + live benchmark together from one command:
+
+ros2 launch realsense_benchmark benchmark_view.launch.py
+
+Phase benchmark (baseline vs stress):
+
+ros2 run realsense_benchmark phase_benchmark_node --ros-args \
+  -p color_topic:=/d435i/camera/color/image_raw \
+  -p depth_topic:=/d435i/camera/depth/image_rect_raw \
+  -p baseline_duration_sec:=30.0 \
+  -p stress_duration_sec:=30.0 \
+  -p stress_cpu_loops:=8 \
+  -p show_window:=true
+
+Detection benchmark (requires MediaPipe installed in the environment):
+
+Wait for 30 seconds after running the script to witness facial expression detection
+
+python -m pip install -U mediapipe
+ros2 run realsense_benchmark detection_benchmark_node --ros-args \
+  -p color_topic:=/d435i/camera/color/image_raw \
+  -p depth_topic:=/d435i/camera/depth/image_rect_raw \
+  -p baseline_duration_sec:=30.0 \
+  -p stress_duration_sec:=30.0 \
+  -p show_window:=true
+
+
+3) Verify NITROS is working with a rectified image topic
+-------------------------------------------------------
+Use one camera, then launch the Isaac ROS rectification node. This creates a new rectified topic.
+
+Host terminal for one camera:
+
+cd /home/$USER/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 run realsense2_camera realsense2_camera_node --ros-args \
+  -r __ns:=/d405 \
+  -p camera_name:=d405 \
+  -p serial_no:=_335122272856 \
+  -p enable_color:=true \
+  -p enable_depth:=false \
+  -p enable_infra1:=false \
+  -p enable_infra2:=false \
+  -p rgb_camera.color_profile:="640x480x60"
+
+Inside the Isaac ROS container, start a component container:
+
+cd /workspaces/isaac_ros-dev
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 run rclcpp_components component_container_mt --ros-args -r __node:=nitros_rectify_container
+
+In a second container terminal, load the Isaac ROS RectifyNode into that container:
+
+cd /workspaces/isaac_ros-dev
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 component load /nitros_rectify_container isaac_ros_image_proc nvidia::isaac_ros::image_proc::RectifyNode \
+  --node-name d405_rectify \
+  -p output_width:=640 \
+  -p output_height:=480 \
+  -r image_raw:=/d405/camera/color/image_raw \
+  -r camera_info:=/d405/camera/color/camera_info \
+  -r image_rect:=/d405/camera/color/image_rect \
+  -r camera_info_rect:=/d405/camera/color/camera_info_rect
+
+Verify the new rectified topic exists (in the host):
+
+ros2 topic info -v /d405/camera/color/image_rect/nitros
+You should see <Type: negotiated_interfaces/msg/NegotiatedTopicsInfo>
+
+Optional visualization:
+
+rviz2
+
+Add this image topic in RViz2:
+  /d405/camera/color/image_rect
+
+
+4) Floor box perception demo
+----------------------------
+For this demo, run D435i with aligned depth enabled so the detector can use color + depth together.
+
+Host terminal for D435i with aligned depth:
+
+cd /home/$USER/ros2_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 run realsense2_camera realsense2_camera_node --ros-args \
+  -r __ns:=/d435i \
+  -p camera_name:=d435i \
+  -p serial_no:=_419622072439 \
+  -p enable_color:=true \
+  -p enable_depth:=true \
+  -p enable_infra1:=false \
+  -p enable_infra2:=false \
+  -p enable_gyro:=false \
+  -p enable_accel:=false \
+  -p pointcloud.enable:=false \
+  -p align_depth.enable:=true \
+  -p rgb_camera.color_profile:="640x480x60" \
+  -p depth_module.depth_profile:="640x480x60"
+
+Inside the Isaac ROS container, launch the box detector with topic overrides that match the RealSense topics above:
+
+cd /workspaces/isaac_ros-dev
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+ros2 run floor_box_perception box_floor_detector --ros-args \
+    -p color_topic:=/d435i/camera/color/image_raw \
+    -p depth_topic:=/d435i/camera/aligned_depth_to_color/image_raw \
+    -p camera_info_topic:=/d435i/camera/color/camera_info \
+    -p show_debug_window:=true
+
