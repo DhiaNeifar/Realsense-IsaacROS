@@ -1,0 +1,16 @@
+[submodule "isaac_ros_common"]
+	path = isaac_ros_common
+	url = https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_common.git
+	branch = release-3.2
+[submodule "isaac_ros_nitros"]
+	path = isaac_ros_nitros
+	url = https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nitros.git
+	branch = release-3.2
+[submodule "isaac_ros_image_pipeline"]
+	path = isaac_ros_image_pipeline
+	url = https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_image_pipeline.git
+	branch = release-3.2
+[submodule "realsense-ros"]
+	path = realsense-ros
+	url = https://github.com/IntelRealSense/realsense-ros.git
+	branch = ros2-master
