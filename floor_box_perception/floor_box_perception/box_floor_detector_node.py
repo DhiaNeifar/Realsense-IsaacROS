@@ -25,9 +25,9 @@ class BoxFloorDetector(Node):
         self._last_points_log_ns = 0
 
         # Parameters
-        self.declare_parameter('color_topic', '/d435i/color/image_raw')
-        self.declare_parameter('depth_topic', '/d435i/aligned_depth_to_color/image_raw')
-        self.declare_parameter('camera_info_topic', '/d435i/color/camera_info')
+        self.declare_parameter('color_topic', '/d435i/camera/color/image_raw')
+        self.declare_parameter('depth_topic', '/d435i/camera/aligned_depth_to_color/image_raw')
+        self.declare_parameter('camera_info_topic', '/d435i/camera/color/camera_info')
         self.declare_parameter('min_depth_m', 0.20)
         self.declare_parameter('max_depth_m', 2.00)
         self.declare_parameter('min_contour_area', 2500)

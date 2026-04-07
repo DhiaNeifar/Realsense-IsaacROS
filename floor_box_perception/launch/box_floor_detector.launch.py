@@ -10,9 +10,9 @@ def generate_launch_description():
             name='box_floor_detector',
             output='screen',
             parameters=[{
-                'color_topic': '/d435i/color/image_raw',
-                'depth_topic': '/d435i/aligned_depth_to_color/image_raw',
-                'camera_info_topic': '/d435i/color/camera_info',
+                'color_topic': '/d435i/camera/color/image_raw',
+                'depth_topic': '/d435i/camera/aligned_depth_to_color/image_raw',
+                'camera_info_topic': '/d435i/camera/color/camera_info',
                 'min_depth_m': 0.20,
                 'max_depth_m': 2.00,
                 'min_contour_area': 2500,

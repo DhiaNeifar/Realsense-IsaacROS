@@ -1,8 +1,12 @@
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    serial_no = LaunchConfiguration("serial_no")
+
     camera_node = Node(
         package="realsense2_camera",
         executable="realsense2_camera_node",
@@ -11,7 +15,7 @@ def generate_launch_description():
         output="screen",
         parameters=[{
             "camera_name": "d435i",
-            "serial_no": "_419622072439",
+            "serial_no": serial_no,
             "enable_color": True,
             "enable_depth": True,
             "enable_infra1": False,
@@ -41,6 +45,11 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument(
+            "serial_no",
+            default_value=EnvironmentVariable("D435I_SERIAL", default_value=""),
+            description="RealSense D435i serial number, including the leading underscore.",
+        ),
         camera_node,
         benchmark_node,
     ])
