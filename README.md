@@ -1,32 +1,47 @@
 # Realsense-IsaacROS
 
-This repository is the reproducible workspace for:
+This repository documents a reproducible RealSense + Isaac ROS setup.
 
-- Intel RealSense SDK (`librealsense`) on the host
-- `realsense-ros` on the host
-- Isaac ROS NITROS and image processing inside the Isaac ROS dev container
-- The custom packages in this repo:
+The workflow is split across two environments:
+
+- Host machine:
+  - `librealsense`
+  - `realsense-ros`
+  - direct access to the USB cameras
+- Isaac ROS dev container:
+  - `isaac_ros_common`
+  - `isaac_ros_nitros`
+  - `isaac_ros_image_pipeline`
   - `realsense_benchmark`
   - `floor_box_perception`
 
-The goal is simple: a new team member should be able to follow this document top to bottom, install everything once, then copy/paste the validation commands to confirm the stack is working.
+The goal is that a new team member can:
+
+1. install the stack once by following this README from top to bottom
+2. copy/paste the validation commands
+3. confirm the cameras, Isaac ROS, NITROS, benchmarks, and demos are working
 
 ## 1. Assumptions
 
 This guide assumes:
 
 - Ubuntu 22.04
-- ROS 2 Humble already installed at `/opt/ros/humble`
-- Docker is installed
-- One Intel RealSense D405 and one Intel RealSense D435i are available
-- The camera drivers run on the host
-- Isaac ROS runs inside the Isaac ROS dev container
+- ROS 2 Humble is already installed at `/opt/ros/humble`
+- Docker is installed and working
+- At least one Intel RealSense D405 or D435i is available
 
-Important split:
+Two workspaces are used:
 
-- Host workspace: `~/ros2_ws`
+- Host RealSense workspace: `~/ros2_ws`
 - Isaac ROS workspace: `~/workspaces/isaac_ros-dev`
-- Repository path after clone: `~/workspaces/isaac_ros-dev/src/Realsense-IsaacROS`
+
+Important workspace rule:
+
+- `realsense-ros` is built on the host in `~/ros2_ws`
+- Isaac ROS and the custom packages are built inside `~/workspaces/isaac_ros-dev`
+- inside the Isaac ROS workspace, the repository contents are copied directly into `src`
+- after setup, you should have directories such as `isaac_ros_common`, `isaac_ros_nitros`, `isaac_ros_image_pipeline`, `realsense_benchmark`, and `floor_box_perception` directly under `${ISAAC_ROS_WS}/src`
+- there should not be an extra `${ISAAC_ROS_WS}/src/Realsense-IsaacROS` directory in the final Isaac ROS workspace
 
 Throughout this README:
 
@@ -35,14 +50,14 @@ Throughout this README:
 
 ## 2. One-Time Host Setup
 
-### 2.1 Set workspace variables
+### 2.1 Export host workspace variables
 
 Run this in a host terminal:
 
 ```bash
 export ROS2_WS=$HOME/ros2_ws
 export ISAAC_ROS_WS=$HOME/workspaces/isaac_ros-dev
-export REPO_ROOT=$ISAAC_ROS_WS/src/Realsense-IsaacROS
+export ISAAC_ROS_SRC=$ISAAC_ROS_WS/src
 ```
 
 ### 2.2 Install host dependencies
@@ -75,7 +90,7 @@ cd ${ROS2_WS}
 
 ### 2.5 Clone and build `librealsense` on the host
 
-Version used in this repo: `v2.55.1`
+Version used here: `v2.55.1`
 
 ```bash
 cd ${ROS2_WS}
@@ -98,24 +113,48 @@ sudo ldconfig
 
 Notes:
 
-- `FORCE_RSUSB_BACKEND=ON` is required here.
+- `FORCE_RSUSB_BACKEND=ON` is required for this setup.
 - `BUILD_UNIT_TESTS=false` avoids unnecessary test build issues.
 
 ### 2.6 Clone and build `realsense-ros` on the host
 
-Do not build `realsense-ros` inside the Isaac ROS container for this workflow.
+`realsense-ros` must be built on the host inside `~/ros2_ws`, not inside the Isaac ROS container.
+
+First clone the ROS wrapper:
 
 ```bash
 cd ${ROS2_WS}/src
 git clone -b ros2-master https://github.com/IntelRealSense/realsense-ros.git
+```
 
+Then build it on the host:
+
+```bash
 cd ${ROS2_WS}
 source /opt/ros/humble/setup.bash
+sudo apt-get install -y python3-rosdep
+
+if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then
+  sudo rosdep init
+fi
+
 rosdep update
-rosdep install --from-paths src --ignore-src -r -y
-colcon build --symlink-install --packages-select realsense2_camera_msgs
+rosdep install -i --from-paths src --rosdistro humble --skip-keys=librealsense2 -y
+colcon build --symlink-install
 source ${ROS2_WS}/install/setup.bash
-colcon build --symlink-install --packages-select realsense2_camera
+```
+
+If the build fails with a permissions error related to `Documents/librealsense2/presets`, fix it and rebuild:
+
+```bash
+sudo mkdir -p ${HOME}/Documents/librealsense2/presets
+sudo chown -R ${USER}:${USER} ${HOME}/Documents
+chmod -R u+rwX ${HOME}/Documents
+
+cd ${ROS2_WS}
+rm -rf build install log
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install
 source ${ROS2_WS}/install/setup.bash
 ```
 
@@ -127,7 +166,7 @@ Test the SDK:
 realsense-viewer
 ```
 
-Confirm the ROS 2 driver is visible:
+Confirm that the ROS 2 driver is visible:
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -137,17 +176,26 @@ ros2 pkg list | grep realsense2_camera
 
 ## 3. One-Time Isaac ROS Workspace Setup
 
-### 3.1 Prepare the Isaac ROS workspace
-
-Run this on the host:
+### 3.1 Prepare the Isaac ROS workspace on the host
 
 ```bash
+export ISAAC_ROS_WS=$HOME/workspaces/isaac_ros-dev
+export ISAAC_ROS_SRC=$ISAAC_ROS_WS/src
+
 sudo systemctl daemon-reload
 sudo systemctl restart docker
-sudo apt-get install -y git-lfs
+sudo apt-get install -y git-lfs rsync
 git lfs install --skip-repo
 
-mkdir -p ${ISAAC_ROS_WS}/src
+mkdir -p ${ISAAC_ROS_SRC}
+```
+
+Optional convenience step:
+
+```bash
+grep -qxF 'export ISAAC_ROS_WS=${HOME}/workspaces/isaac_ros-dev' ~/.bashrc || \
+  echo 'export ISAAC_ROS_WS=${HOME}/workspaces/isaac_ros-dev' >> ~/.bashrc
+source ~/.bashrc
 ```
 
 If Docker access is not already configured for your user:
@@ -158,57 +206,74 @@ newgrp docker
 groups
 ```
 
-### 3.2 Clone this repository with submodules
+### 3.2 Clone the repository into the Isaac ROS workspace
+
+The final Isaac ROS workspace should be flat. That means the contents of this repository live directly under `${ISAAC_ROS_WS}/src`, not under a nested `Realsense-IsaacROS` folder.
 
 Run this on the host:
 
 ```bash
-cd ${ISAAC_ROS_WS}/src
-git clone --recurse-submodules https://github.com/DhiaNeifar/Realsense-IsaacROS.git
-cd Realsense-IsaacROS
-git submodule update --init --recursive
+export ISAAC_ROS_WS=$HOME/workspaces/isaac_ros-dev
+export ISAAC_ROS_SRC=$ISAAC_ROS_WS/src
+
+cd ${ISAAC_ROS_SRC}
+git clone --recurse-submodules https://github.com/DhiaNeifar/Realsense-IsaacROS.git temp_repo
+git -C temp_repo submodule update --init --recursive
+rsync -a --exclude .git temp_repo/ ./
+rm -rf temp_repo
 ```
 
-This repo includes these Isaac ROS submodules:
+After the copy, these directories should exist directly under `${ISAAC_ROS_SRC}`:
 
 - `isaac_ros_common`
 - `isaac_ros_nitros`
 - `isaac_ros_image_pipeline`
+- `realsense_benchmark`
+- `floor_box_perception`
 
-### 3.3 Configure the Isaac ROS dev container
-
-Run this on the host:
+If an extra `${ISAAC_ROS_SRC}/Realsense-IsaacROS` folder exists from an older setup, remove it:
 
 ```bash
-export REPO_ROOT=${ISAAC_ROS_WS}/src/Realsense-IsaacROS
+cd ${ISAAC_ROS_SRC}
+if [ -d Realsense-IsaacROS ]; then
+  rm -rf Realsense-IsaacROS
+fi
+```
 
-cd ${REPO_ROOT}/isaac_ros_common/scripts
+### 3.3 Configure and enter the Isaac ROS dev container
+
+Create the Isaac ROS container config on the host:
+
+```bash
+export ISAAC_ROS_WS=$HOME/workspaces/isaac_ros-dev
+export ISAAC_ROS_SRC=$ISAAC_ROS_WS/src
+
+cd ${ISAAC_ROS_SRC}/isaac_ros_common/scripts
 touch .isaac_ros_common-config
 echo CONFIG_IMAGE_KEY=ros2_humble.realsense > .isaac_ros_common-config
 ```
 
-### 3.4 Start the Isaac ROS dev container
-
-Run this on the host:
+Launch the dev container from the host:
 
 ```bash
-cd ${REPO_ROOT}/isaac_ros_common
+cd ${ISAAC_ROS_SRC}/isaac_ros_common
 ./scripts/run_dev.sh -d ${ISAAC_ROS_WS}
 ```
 
-Inside the container, the workspace root is:
+Inside the container, the workspace path is:
 
 ```bash
 /workspaces/isaac_ros-dev
 ```
 
-### 3.5 Install dependencies inside the container
+### 3.4 Install dependencies inside the Isaac ROS container
 
 Run this in a container terminal:
 
 ```bash
 export ISAAC_ROS_WS=/workspaces/isaac_ros-dev
-export REPO_ROOT=${ISAAC_ROS_WS}/src/Realsense-IsaacROS
+export ISAAC_ROS_SRC=${ISAAC_ROS_WS}/src
+export RESULTS_DIR=${ISAAC_ROS_SRC}/realsense_benchmark/results
 
 cd ${ISAAC_ROS_WS}
 source /opt/ros/humble/setup.bash
@@ -216,10 +281,18 @@ source /opt/ros/humble/setup.bash
 sudo apt-get update
 rosdep update
 rosdep install --from-paths src --ignore-src -r -y
-sudo apt-get install -y python3-opencv python3-numpy python3-matplotlib
+
+sudo apt-get install -y \
+  ros-humble-magic-enum \
+  ros-humble-foxglove-msgs \
+  python3-opencv \
+  python3-numpy \
+  python3-matplotlib
+
+mkdir -p ${RESULTS_DIR}
 ```
 
-If `apt` metadata is stale and `rosdep` fails:
+If `apt` metadata is stale and dependency installation fails:
 
 ```bash
 sudo apt-get clean
@@ -227,17 +300,34 @@ sudo rm -rf /var/lib/apt/lists/*
 sudo apt-get update
 rosdep update
 rosdep install --from-paths src --ignore-src -r -y
+
+sudo apt-get install -y \
+  ros-humble-magic-enum \
+  ros-humble-foxglove-msgs \
+  python3-opencv \
+  python3-numpy \
+  python3-matplotlib
 ```
 
-### 3.6 Build the Isaac ROS and custom packages inside the container
+### 3.5 Build Isaac ROS and the custom packages inside the container
 
-Run this in a container terminal:
+Before building, make sure there is no duplicate `Realsense-IsaacROS` directory inside `src`:
 
 ```bash
 export ISAAC_ROS_WS=/workspaces/isaac_ros-dev
-export REPO_ROOT=${ISAAC_ROS_WS}/src/Realsense-IsaacROS
+export ISAAC_ROS_SRC=${ISAAC_ROS_WS}/src
 
+cd ${ISAAC_ROS_SRC}
+if [ -d Realsense-IsaacROS ]; then
+  rm -rf Realsense-IsaacROS
+fi
+```
+
+Then build the workspace:
+
+```bash
 cd ${ISAAC_ROS_WS}
+rm -rf build install log
 source /opt/ros/humble/setup.bash
 
 colcon build --packages-up-to isaac_ros_nitros --symlink-install --cmake-args -DBUILD_TESTING=OFF
@@ -255,7 +345,7 @@ Why the second Isaac ROS build matters:
 - `RectifyNode` comes from `isaac_ros_image_proc`
 - building only up to `isaac_ros_nitros` is not enough for the NITROS rectification test
 
-Verify the packages are available:
+Verify that the packages are visible:
 
 ```bash
 ros2 pkg list | grep -E 'isaac_ros_image_proc|realsense_benchmark|floor_box_perception'
@@ -264,35 +354,48 @@ ros2 component types | grep -i Rectify
 
 ## 4. Export Camera Serials Instead of Hard-Coding Them
 
-Do this in every host terminal where you will launch a RealSense camera:
+This avoids copy/pasting commands with the wrong serial number.
+
+Paste this into any host terminal where you will launch a RealSense camera:
 
 ```bash
 export ROS2_WS=$HOME/ros2_ws
 source /opt/ros/humble/setup.bash
 source ${ROS2_WS}/install/setup.bash
 
-eval "$(
-  rs-enumerate-devices | awk -F': ' '
-    /^[[:space:]]*Name[[:space:]]*:/ {
-      name=$2
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
-    }
-    /^[[:space:]]*Serial Number[[:space:]]*:/ {
-      serial=$2
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", serial)
-      if (name ~ /D405/) print "export D405_SERIAL=_" serial
-      if (name ~ /D435I|D435i/) print "export D435I_SERIAL=_" serial
-    }
-  '
-)"
+export_realsense_serials() {
+  eval "$(
+    rs-enumerate-devices | awk -F': ' '
+      /^[[:space:]]*Name[[:space:]]*:/ {
+        name=$2
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+      }
+      /^[[:space:]]*Serial Number[[:space:]]*:/ {
+        serial=$2
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", serial)
+        if (name ~ /D405/) print "export D405_SERIAL=_" serial
+        if (name ~ /D435I|D435i/) print "export D435I_SERIAL=_" serial
+      }
+    '
+  )"
 
-printf 'D405_SERIAL=%s\nD435I_SERIAL=%s\n' "$D405_SERIAL" "$D435I_SERIAL"
+  printf 'D405_SERIAL=%s\nD435I_SERIAL=%s\n' "$D405_SERIAL" "$D435I_SERIAL"
+}
 ```
 
-If either value is empty, inspect the raw device list and export the variable manually:
+Then run:
+
+```bash
+export_realsense_serials
+```
+
+If a value is empty, inspect the raw device list and export it manually:
 
 ```bash
 rs-enumerate-devices
+
+export D405_SERIAL=_YOUR_D405_SERIAL
+export D435I_SERIAL=_YOUR_D435I_SERIAL
 ```
 
 ## 5. Daily Runtime Commands
@@ -303,9 +406,9 @@ Host terminal:
 
 ```bash
 export ISAAC_ROS_WS=$HOME/workspaces/isaac_ros-dev
-export REPO_ROOT=$ISAAC_ROS_WS/src/Realsense-IsaacROS
+export ISAAC_ROS_SRC=$ISAAC_ROS_WS/src
 
-cd ${REPO_ROOT}/isaac_ros_common
+cd ${ISAAC_ROS_SRC}/isaac_ros_common
 ./scripts/run_dev.sh -d ${ISAAC_ROS_WS}
 ```
 
@@ -313,14 +416,22 @@ Container terminal setup:
 
 ```bash
 export ISAAC_ROS_WS=/workspaces/isaac_ros-dev
-export REPO_ROOT=${ISAAC_ROS_WS}/src/Realsense-IsaacROS
+export ISAAC_ROS_SRC=${ISAAC_ROS_WS}/src
+export RESULTS_DIR=${ISAAC_ROS_SRC}/realsense_benchmark/results
 
 cd ${ISAAC_ROS_WS}
 source /opt/ros/humble/setup.bash
 source install/setup.bash
+mkdir -p ${RESULTS_DIR}
 ```
 
 ### 5.2 Run both cameras and verify the streams in RViz2
+
+In each host terminal below:
+
+1. source the host ROS environment
+2. define the `export_realsense_serials` helper from Section 4 if this is a fresh shell
+3. run `export_realsense_serials`
 
 Host terminal 1, D405:
 
@@ -328,18 +439,7 @@ Host terminal 1, D405:
 export ROS2_WS=$HOME/ros2_ws
 source /opt/ros/humble/setup.bash
 source ${ROS2_WS}/install/setup.bash
-
-eval "$(
-  rs-enumerate-devices | awk -F': ' '
-    /^[[:space:]]*Name[[:space:]]*:/ { name=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", name) }
-    /^[[:space:]]*Serial Number[[:space:]]*:/ {
-      serial=$2
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", serial)
-      if (name ~ /D405/) print "export D405_SERIAL=_" serial
-      if (name ~ /D435I|D435i/) print "export D435I_SERIAL=_" serial
-    }
-  '
-)"
+export_realsense_serials
 
 ros2 run realsense2_camera realsense2_camera_node --ros-args \
   -r __ns:=/d405 \
@@ -361,18 +461,7 @@ Host terminal 2, D435i:
 export ROS2_WS=$HOME/ros2_ws
 source /opt/ros/humble/setup.bash
 source ${ROS2_WS}/install/setup.bash
-
-eval "$(
-  rs-enumerate-devices | awk -F': ' '
-    /^[[:space:]]*Name[[:space:]]*:/ { name=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", name) }
-    /^[[:space:]]*Serial Number[[:space:]]*:/ {
-      serial=$2
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", serial)
-      if (name ~ /D405/) print "export D405_SERIAL=_" serial
-      if (name ~ /D435I|D435i/) print "export D435I_SERIAL=_" serial
-    }
-  '
-)"
+export_realsense_serials
 
 ros2 run realsense2_camera realsense2_camera_node --ros-args \
   -r __ns:=/d435i \
@@ -399,7 +488,7 @@ source ${ROS2_WS}/install/setup.bash
 rviz2
 ```
 
-Useful image topics for RViz2:
+Useful RViz2 image topics:
 
 - `/d405/camera/color/image_raw`
 - `/d405/camera/depth/image_rect_raw`
@@ -420,11 +509,13 @@ Container terminal:
 
 ```bash
 export ISAAC_ROS_WS=/workspaces/isaac_ros-dev
-export REPO_ROOT=${ISAAC_ROS_WS}/src/Realsense-IsaacROS
+export ISAAC_ROS_SRC=${ISAAC_ROS_WS}/src
+export RESULTS_DIR=${ISAAC_ROS_SRC}/realsense_benchmark/results
 
 cd ${ISAAC_ROS_WS}
 source /opt/ros/humble/setup.bash
 source install/setup.bash
+mkdir -p ${RESULTS_DIR}
 ```
 
 Live benchmark:
@@ -444,7 +535,7 @@ ros2 run realsense_benchmark phase_benchmark_node --ros-args \
   -p baseline_duration_sec:=30.0 \
   -p stress_duration_sec:=30.0 \
   -p stress_cpu_loops:=8 \
-  -p output_dir:=${REPO_ROOT}/realsense_benchmark/results \
+  -p output_dir:=${RESULTS_DIR} \
   -p show_window:=true
 ```
 
@@ -458,14 +549,14 @@ ros2 run realsense_benchmark detection_benchmark_node --ros-args \
   -p depth_topic:=/d435i/camera/depth/image_rect_raw \
   -p baseline_duration_sec:=30.0 \
   -p stress_duration_sec:=30.0 \
-  -p output_dir:=${REPO_ROOT}/realsense_benchmark/results \
+  -p output_dir:=${RESULTS_DIR} \
   -p show_window:=true
 ```
 
-Note:
+Notes:
 
 - Wait about 30 seconds after starting the detection benchmark to observe the facial-expression overlay.
-- The one-command launch files in `realsense_benchmark/launch` start a RealSense camera in the same environment as the benchmark. In the default split documented here, the camera driver lives on the host and the benchmark runs in the container, so the separate host/container commands above are the reproducible path.
+- The launch files in `realsense_benchmark/launch` read `D435I_SERIAL` instead of a hard-coded serial number, but the default reproducible workflow here still keeps the camera driver on the host and the benchmark inside the container.
 
 ### 5.4 Verify NITROS with a rectified image topic
 
@@ -475,17 +566,7 @@ Host terminal, D405 color stream only:
 export ROS2_WS=$HOME/ros2_ws
 source /opt/ros/humble/setup.bash
 source ${ROS2_WS}/install/setup.bash
-
-eval "$(
-  rs-enumerate-devices | awk -F': ' '
-    /^[[:space:]]*Name[[:space:]]*:/ { name=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", name) }
-    /^[[:space:]]*Serial Number[[:space:]]*:/ {
-      serial=$2
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", serial)
-      if (name ~ /D405/) print "export D405_SERIAL=_" serial
-    }
-  '
-)"
+export_realsense_serials
 
 ros2 run realsense2_camera realsense2_camera_node --ros-args \
   -r __ns:=/d405 \
@@ -536,7 +617,7 @@ ros2 component load /nitros_rectify_container isaac_ros_image_proc nvidia::isaac
   -r camera_info_rect:=/d405/camera/color/camera_info_rect
 ```
 
-Host terminal, confirm the negotiated topic exists:
+Host terminal, confirm that the negotiated topic exists:
 
 ```bash
 export ROS2_WS=$HOME/ros2_ws
@@ -558,7 +639,7 @@ Optional visualization:
 rviz2
 ```
 
-Add this topic:
+Add this image topic:
 
 - `/d405/camera/color/image_rect`
 
@@ -570,17 +651,7 @@ Host terminal, D435i with aligned depth enabled:
 export ROS2_WS=$HOME/ros2_ws
 source /opt/ros/humble/setup.bash
 source ${ROS2_WS}/install/setup.bash
-
-eval "$(
-  rs-enumerate-devices | awk -F': ' '
-    /^[[:space:]]*Name[[:space:]]*:/ { name=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", name) }
-    /^[[:space:]]*Serial Number[[:space:]]*:/ {
-      serial=$2
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", serial)
-      if (name ~ /D435I|D435i/) print "export D435I_SERIAL=_" serial
-    }
-  '
-)"
+export_realsense_serials
 
 ros2 run realsense2_camera realsense2_camera_node --ros-args \
   -r __ns:=/d435i \
@@ -598,7 +669,7 @@ ros2 run realsense2_camera realsense2_camera_node --ros-args \
   -p depth_module.depth_profile:="640x480x60"
 ```
 
-Container terminal, launch the detector:
+Container terminal, run the detector:
 
 ```bash
 export ISAAC_ROS_WS=/workspaces/isaac_ros-dev
@@ -636,18 +707,22 @@ export D405_SERIAL=_YOUR_D405_SERIAL
 export D435I_SERIAL=_YOUR_D435I_SERIAL
 ```
 
-### 6.2 NITROS fails with:
+### 6.2 `realsense-ros` fails to build because of `Documents/librealsense2/presets`
 
-```text
-filesystem error: cannot create directories: Permission denied [/tmp/isaac_ros_nitros/...]
-```
-
-Fix it in the container:
+Fix the permissions and rebuild on the host:
 
 ```bash
-sudo rm -rf /tmp/isaac_ros_nitros
-sudo mkdir -p /tmp/isaac_ros_nitros
-sudo chmod -R 777 /tmp/isaac_ros_nitros
+export ROS2_WS=$HOME/ros2_ws
+
+sudo mkdir -p ${HOME}/Documents/librealsense2/presets
+sudo chown -R ${USER}:${USER} ${HOME}/Documents
+chmod -R u+rwX ${HOME}/Documents
+
+cd ${ROS2_WS}
+rm -rf build install log
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install
+source ${ROS2_WS}/install/setup.bash
 ```
 
 ### 6.3 `rosdep install` fails because package metadata is stale
@@ -660,9 +735,59 @@ sudo rm -rf /var/lib/apt/lists/*
 sudo apt-get update
 rosdep update
 rosdep install --from-paths src --ignore-src -r -y
+
+sudo apt-get install -y \
+  ros-humble-magic-enum \
+  ros-humble-foxglove-msgs \
+  python3-opencv \
+  python3-numpy \
+  python3-matplotlib
 ```
 
-### 6.4 GUI windows do not open in the container
+### 6.4 Isaac ROS packages are not found because the workspace is nested
+
+If you see a duplicate `${ISAAC_ROS_WS}/src/Realsense-IsaacROS` directory, remove it so the packages live directly under `src`:
+
+```bash
+export ISAAC_ROS_WS=$HOME/workspaces/isaac_ros-dev
+
+cd ${ISAAC_ROS_WS}/src
+rm -rf Realsense-IsaacROS
+```
+
+Then rebuild:
+
+```bash
+export ISAAC_ROS_WS=/workspaces/isaac_ros-dev
+
+cd ${ISAAC_ROS_WS}
+rm -rf build install log
+source /opt/ros/humble/setup.bash
+colcon build --packages-up-to isaac_ros_nitros --symlink-install --cmake-args -DBUILD_TESTING=OFF
+source install/setup.bash
+colcon build --packages-up-to isaac_ros_image_proc --symlink-install --cmake-args -DBUILD_TESTING=OFF
+source install/setup.bash
+colcon build --packages-select realsense_benchmark floor_box_perception --symlink-install
+source install/setup.bash
+```
+
+### 6.5 NITROS fails with a permissions error under `/tmp/isaac_ros_nitros`
+
+If you see:
+
+```text
+filesystem error: cannot create directories: Permission denied [/tmp/isaac_ros_nitros/...]
+```
+
+Fix it inside the container:
+
+```bash
+sudo rm -rf /tmp/isaac_ros_nitros
+sudo mkdir -p /tmp/isaac_ros_nitros
+sudo chmod -R 777 /tmp/isaac_ros_nitros
+```
+
+### 6.6 GUI windows do not open in the container
 
 If you are running headless or without GUI forwarding, set:
 
