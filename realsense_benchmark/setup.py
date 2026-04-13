@@ -19,7 +19,7 @@ setup(
     zip_safe=True,
     maintainer='dhianeifar',
     maintainer_email='dhianeifar@todo.todo',
-    description='TODO: Package description',
+    description='Benchmark utilities for RealSense RGB-D stream throughput and inference load testing.',
     license='Apache-2.0',
     extras_require={
         'test': [

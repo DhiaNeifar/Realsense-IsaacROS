@@ -28,9 +28,7 @@ Launch example
 
 import os
 import time
-from collections import deque
 from datetime import datetime
-from pathlib import Path
 
 import cv2
 import matplotlib.pyplot as plt
@@ -38,13 +36,16 @@ import numpy as np
 import rclpy
 from cv_bridge import CvBridge
 from rclpy.node import Node
-from rclpy.qos import (
-    DurabilityPolicy,
-    HistoryPolicy,
-    QoSProfile,
-    ReliabilityPolicy,
-)
 from sensor_msgs.msg import Image
+
+from realsense_benchmark.common import (
+    DEFAULT_RESULTS_DIR,
+    RollingFPS,
+    destroy_opencv_windows,
+    ensure_directory,
+    image_qos_profile,
+    probe_display_available,
+)
 
 # ---------------------------------------------------------------------------
 # MediaPipe imports — graceful error if not installed
@@ -124,23 +125,6 @@ def classify_expression(landmarks, w, h):
 
 
 # ---------------------------------------------------------------------------
-# Rolling FPS counter
-# ---------------------------------------------------------------------------
-class RollingFPS:
-    def __init__(self, window_size=60):
-        self.timestamps = deque(maxlen=window_size)
-
-    def tick(self):
-        self.timestamps.append(time.perf_counter())
-
-    def get(self):
-        if len(self.timestamps) < 2:
-            return 0.0
-        dt = self.timestamps[-1] - self.timestamps[0]
-        return 0.0 if dt <= 0 else (len(self.timestamps) - 1) / dt
-
-
-# ---------------------------------------------------------------------------
 # Colours for drawing
 # ---------------------------------------------------------------------------
 _COL_GREEN = (0, 255, 100)
@@ -176,7 +160,7 @@ class DetectionBenchmarkNode(Node):
         self.declare_parameter("render_hz", 30.0)
         self.declare_parameter(
             "output_dir",
-            str(Path.home() / "ros2_ws" / "src" / "realsense_benchmark" / "results"),
+            str(DEFAULT_RESULTS_DIR),
         )
         self.declare_parameter("show_window", True)
 
@@ -189,7 +173,7 @@ class DetectionBenchmarkNode(Node):
         self.output_dir = self.get_parameter("output_dir").value
         self.show_window = bool(self.get_parameter("show_window").value)
 
-        os.makedirs(self.output_dir, exist_ok=True)
+        self.output_dir = ensure_directory(self.output_dir)
 
         # ── MediaPipe pipelines (created once, kept alive) ─────────────────
         # Running all three simultaneously is the deliberate stress load.
@@ -244,12 +228,7 @@ class DetectionBenchmarkNode(Node):
         self.records_phase = []
 
         # ── QoS ───────────────────────────────────────────────────────────
-        sensor_qos = QoSProfile(
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.VOLATILE,
-        )
+        sensor_qos = image_qos_profile()
 
         self.color_sub = self.create_subscription(
             Image, self.color_topic, self.color_callback, sensor_qos
@@ -262,7 +241,7 @@ class DetectionBenchmarkNode(Node):
         self.sample_timer = self.create_timer(1.0 / self.sample_hz, self.sample_metrics)
 
         # ── display probe ─────────────────────────────────────────────────
-        self._display_available = self._check_display()
+        self._display_available = probe_display_available(self.show_window)
         if self.show_window and not self._display_available:
             self.get_logger().warn(
                 "show_window=True but no display found. "
@@ -277,21 +256,6 @@ class DetectionBenchmarkNode(Node):
             f"(FaceDetection + FaceMesh[refine] + Hands x4)"
         )
         self.get_logger().info(f"Results → {self.output_dir}")
-
-    # ── display probe ──────────────────────────────────────────────────────
-    def _check_display(self) -> bool:
-        if not self.show_window:
-            return False
-        if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
-            return False
-        try:
-            cv2.namedWindow("_probe", cv2.WINDOW_NORMAL)
-            cv2.resizeWindow("_probe", 1, 1)
-            cv2.waitKey(1)
-            cv2.destroyWindow("_probe")
-            return True
-        except Exception:
-            return False
 
     # ── helpers ────────────────────────────────────────────────────────────
     def current_elapsed(self):
@@ -581,8 +545,7 @@ class DetectionBenchmarkNode(Node):
             return
         self.done = True
 
-        if self.show_window and self._display_available:
-            cv2.destroyAllWindows()
+        destroy_opencv_windows(self.show_window, self._display_available)
 
         # Release MediaPipe resources
         self.mp_face_det.close()
@@ -700,7 +663,7 @@ def main(args=None):
         pass
     finally:
         if rclpy.ok():
-            if hasattr(node, "_display_available") and node._display_available:
-                cv2.destroyAllWindows()
+            if hasattr(node, "_display_available"):
+                destroy_opencv_windows(node.show_window, node._display_available)
             node.destroy_node()
             rclpy.shutdown()

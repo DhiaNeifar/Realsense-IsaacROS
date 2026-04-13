@@ -1,42 +1,21 @@
 import time
-from collections import deque
 
 import cv2
 import numpy as np
 import rclpy
 from cv_bridge import CvBridge
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import ReliabilityPolicy
 from sensor_msgs.msg import Image
 
-
-class RollingFPS:
-    def __init__(self, window_size=60):
-        self.timestamps = deque(maxlen=window_size)
-
-    def tick(self):
-        self.timestamps.append(time.perf_counter())
-
-    def get(self):
-        if len(self.timestamps) < 2:
-            return 0.0
-        dt = self.timestamps[-1] - self.timestamps[0]
-        if dt <= 0:
-            return 0.0
-        return (len(self.timestamps) - 1) / dt
-
-
-class RollingMean:
-    def __init__(self, window_size=60):
-        self.values = deque(maxlen=window_size)
-
-    def add(self, value):
-        self.values.append(float(value))
-
-    def get(self):
-        if not self.values:
-            return 0.0
-        return sum(self.values) / len(self.values)
+from realsense_benchmark.common import (
+    RollingFPS,
+    RollingMean,
+    destroy_opencv_windows,
+    image_qos_profile,
+    probe_display_available,
+)
+from realsense_benchmark.depth_tools import render_depth_band_overlay
 
 
 class LiveBenchmarkNode(Node):
@@ -49,6 +28,7 @@ class LiveBenchmarkNode(Node):
         self.declare_parameter("band_min_m", 0.4)
         self.declare_parameter("band_max_m", 1.5)
         self.declare_parameter("report_period_sec", 1.0)
+        self.declare_parameter("show_window", True)
 
         self.color_topic = self.get_parameter("color_topic").value
         self.depth_topic = self.get_parameter("depth_topic").value
@@ -56,6 +36,7 @@ class LiveBenchmarkNode(Node):
         self.band_min_m = float(self.get_parameter("band_min_m").value)
         self.band_max_m = float(self.get_parameter("band_max_m").value)
         self.report_period_sec = float(self.get_parameter("report_period_sec").value)
+        self.show_window = bool(self.get_parameter("show_window").value)
 
         self.bridge = CvBridge()
 
@@ -69,23 +50,29 @@ class LiveBenchmarkNode(Node):
         self.latest_color = None
         self.latest_depth = None
 
+        self._display_available = probe_display_available(self.show_window)
+
         self.color_sub = self.create_subscription(
             Image,
             self.color_topic,
             self.color_callback,
-            qos_profile_sensor_data,
+            image_qos_profile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT),
         )
 
         self.depth_sub = self.create_subscription(
             Image,
             self.depth_topic,
             self.depth_callback,
-            qos_profile_sensor_data,
+            image_qos_profile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT),
         )
 
         self.get_logger().info(f"Subscribed color: {self.color_topic}")
         self.get_logger().info(f"Subscribed depth: {self.depth_topic}")
         self.get_logger().info(f"cpu_loops={self.cpu_loops}")
+        if self.show_window and not self._display_available:
+            self.get_logger().warn(
+                "show_window=True but no display found. Live window disabled."
+            )
 
     def color_callback(self, msg):
         try:
@@ -102,32 +89,6 @@ class LiveBenchmarkNode(Node):
             self.try_display()
         except Exception as e:
             self.get_logger().error(f"Depth callback error: {e}")
-
-    def process_depth(self, depth_raw):
-        t0 = time.perf_counter()
-
-        depth = depth_raw.astype(np.float32) / 1000.0  # mm -> meters
-        valid = np.isfinite(depth)
-
-        mask = np.zeros(depth.shape, dtype=np.uint8)
-        mask[(valid) & (depth >= self.band_min_m) & (depth <= self.band_max_m)] = 255
-
-        for _ in range(self.cpu_loops):
-            mask = cv2.GaussianBlur(mask, (5, 5), 0)
-            mask = cv2.medianBlur(mask, 5)
-            mask = cv2.Sobel(mask, cv2.CV_8U, 1, 0, ksize=3)
-
-        depth_vis = np.nan_to_num(depth, nan=0.0, posinf=0.0, neginf=0.0)
-        depth_vis = cv2.normalize(depth_vis, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
-
-        overlay = np.zeros_like(depth_vis)
-        overlay[:, :, 1] = mask
-        out = cv2.addWeighted(depth_vis, 1.0, overlay, 0.45, 0.0)
-
-        t1 = time.perf_counter()
-        self.proc_ms.add((t1 - t0) * 1000.0)
-        return out
 
     def draw_overlay(self, image):
         lines = [
@@ -157,7 +118,13 @@ class LiveBenchmarkNode(Node):
             return
 
         color = self.latest_color.copy()
-        depth_vis = self.process_depth(self.latest_depth)
+        depth_vis, proc_ms = render_depth_band_overlay(
+            self.latest_depth,
+            band_min_m=self.band_min_m,
+            band_max_m=self.band_max_m,
+            cpu_loops=self.cpu_loops,
+        )
+        self.proc_ms.add(proc_ms)
 
         h, w = color.shape[:2]
         depth_vis = cv2.resize(depth_vis, (w, h))
@@ -165,8 +132,13 @@ class LiveBenchmarkNode(Node):
         combined = np.hstack([color, depth_vis])
         self.draw_overlay(combined)
 
-        cv2.imshow("RealSense Benchmark", combined)
-        cv2.waitKey(1)
+        if self.show_window and self._display_available:
+            try:
+                cv2.imshow("RealSense Benchmark", combined)
+                cv2.waitKey(1)
+            except Exception as exc:
+                self.get_logger().error(f"Display error: {exc}")
+                self._display_available = False
 
         self.display_fps.tick()
 
@@ -189,6 +161,6 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        cv2.destroyAllWindows()
+        destroy_opencv_windows(node.show_window, node._display_available)
         node.destroy_node()
         rclpy.shutdown()

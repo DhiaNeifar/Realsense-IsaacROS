@@ -1,8 +1,6 @@
 import os
 import time
-from collections import deque
 from datetime import datetime
-from pathlib import Path
 
 import cv2
 import matplotlib.pyplot as plt
@@ -10,24 +8,17 @@ import numpy as np
 import rclpy
 from cv_bridge import CvBridge
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from sensor_msgs.msg import Image
 
-
-class RollingFPS:
-    def __init__(self, window_size=60):
-        self.timestamps = deque(maxlen=window_size)
-
-    def tick(self):
-        self.timestamps.append(time.perf_counter())
-
-    def get(self):
-        if len(self.timestamps) < 2:
-            return 0.0
-        dt = self.timestamps[-1] - self.timestamps[0]
-        if dt <= 0:
-            return 0.0
-        return (len(self.timestamps) - 1) / dt
+from realsense_benchmark.common import (
+    DEFAULT_RESULTS_DIR,
+    RollingFPS,
+    destroy_opencv_windows,
+    ensure_directory,
+    image_qos_profile,
+    probe_display_available,
+)
+from realsense_benchmark.depth_tools import render_depth_band_overlay
 
 
 class PhaseBenchmarkNode(Node):
@@ -45,7 +36,7 @@ class PhaseBenchmarkNode(Node):
         self.declare_parameter("render_hz", 30.0)
         self.declare_parameter(
             "output_dir",
-            str(Path.home() / "ros2_ws" / "src" / "realsense_benchmark" / "results"),
+            str(DEFAULT_RESULTS_DIR),
         )
         self.declare_parameter("show_window", True)
 
@@ -61,7 +52,7 @@ class PhaseBenchmarkNode(Node):
         self.output_dir = self.get_parameter("output_dir").value
         self.show_window = bool(self.get_parameter("show_window").value)
 
-        os.makedirs(self.output_dir, exist_ok=True)
+        self.output_dir = ensure_directory(self.output_dir)
 
         self.bridge = CvBridge()
 
@@ -85,24 +76,9 @@ class PhaseBenchmarkNode(Node):
         self.records_display_fps = []
         self.records_phase = []
 
-        # ---------------------------------------------------------------
-        # FIX 1: QoS compatibility
-        #
-        # The RealSense ROS2 driver publishes with RELIABLE reliability by
-        # default.  A BEST_EFFORT subscriber is *incompatible* with a
-        # RELIABLE publisher in ROS 2 — messages are silently dropped and
-        # FPS stays 0.  We now try RELIABLE first; if your driver really
-        # does use BEST_EFFORT you can flip this back, but RELIABLE works
-        # with both publisher policies.
-        #
-        # Also raised depth to 10 to avoid drops during stress phase.
-        # ---------------------------------------------------------------
-        sensor_qos = QoSProfile(
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10,
-            reliability=ReliabilityPolicy.RELIABLE,   # was BEST_EFFORT
-            durability=DurabilityPolicy.VOLATILE,
-        )
+        # Use the same explicit image QoS across the benchmark nodes so the
+        # behavior is predictable and easy to reason about.
+        sensor_qos = image_qos_profile()
 
         self.color_sub = self.create_subscription(
             Image, self.color_topic, self.color_callback, sensor_qos
@@ -118,7 +94,7 @@ class PhaseBenchmarkNode(Node):
         # FIX 2: Detect whether a display is actually available so we
         # don't silently swallow cv2.imshow errors for the entire run.
         # ---------------------------------------------------------------
-        self._display_available = self._check_display()
+        self._display_available = probe_display_available(self.show_window)
         if self.show_window and not self._display_available:
             self.get_logger().warn(
                 "show_window=True but no display found (DISPLAY env var not set or "
@@ -136,27 +112,6 @@ class PhaseBenchmarkNode(Node):
             f"QoS: RELIABLE/VOLATILE/KEEP_LAST(10) — "
             "change to BEST_EFFORT if your driver publishes with that policy"
         )
-
-    # -------------------------------------------------------------------
-    # FIX 2 helper: probe for a usable display before trying imshow
-    # -------------------------------------------------------------------
-    def _check_display(self) -> bool:
-        if not self.show_window:
-            return False
-        display = os.environ.get("DISPLAY", "")
-        wayland = os.environ.get("WAYLAND_DISPLAY", "")
-        if not display and not wayland:
-            return False
-        # Try actually opening a tiny window; on Jetson this can still fail
-        # even with DISPLAY set if there is no compositing server running.
-        try:
-            cv2.namedWindow("_probe", cv2.WINDOW_NORMAL)
-            cv2.resizeWindow("_probe", 1, 1)
-            cv2.waitKey(1)
-            cv2.destroyWindow("_probe")
-            return True
-        except Exception:
-            return False
 
     def current_elapsed(self):
         return time.perf_counter() - self.start_time
@@ -191,27 +146,6 @@ class PhaseBenchmarkNode(Node):
                 self.first_depth_logged = True
         except Exception as e:
             self.get_logger().error(f"Depth callback error: {e}")
-
-    def process_depth(self, depth_raw, cpu_loops):
-        depth = depth_raw.astype(np.float32) / 1000.0
-        valid = np.isfinite(depth)
-
-        mask = np.zeros(depth.shape, dtype=np.uint8)
-        mask[(valid) & (depth >= self.band_min_m) & (depth <= self.band_max_m)] = 255
-
-        for _ in range(cpu_loops):
-            mask = cv2.GaussianBlur(mask, (5, 5), 0)
-            mask = cv2.medianBlur(mask, 5)
-            mask = cv2.Sobel(mask, cv2.CV_8U, 1, 0, ksize=3)
-
-        depth_vis = np.nan_to_num(depth, nan=0.0, posinf=0.0, neginf=0.0)
-        depth_vis = cv2.normalize(depth_vis, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        depth_vis = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
-
-        overlay = np.zeros_like(depth_vis)
-        overlay[:, :, 1] = mask
-        out = cv2.addWeighted(depth_vis, 1.0, overlay, 0.45, 0.0)
-        return out
 
     def draw_overlay(self, image, phase, cpu_loops):
         lines = [
@@ -252,7 +186,12 @@ class PhaseBenchmarkNode(Node):
         cpu_loops = self.current_cpu_loops()
 
         color = self.latest_color.copy()
-        depth_vis = self.process_depth(self.latest_depth, cpu_loops)
+        depth_vis, _ = render_depth_band_overlay(
+            self.latest_depth,
+            band_min_m=self.band_min_m,
+            band_max_m=self.band_max_m,
+            cpu_loops=cpu_loops,
+        )
 
         h, w = color.shape[:2]
         depth_vis = cv2.resize(depth_vis, (w, h))
@@ -308,8 +247,7 @@ class PhaseBenchmarkNode(Node):
             return
         self.done = True
 
-        if self.show_window and self._display_available:
-            cv2.destroyAllWindows()
+        destroy_opencv_windows(self.show_window, self._display_available)
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         fig_path = os.path.join(self.output_dir, f"phase_compare_{ts}.png")
@@ -386,7 +324,6 @@ def main(args=None):
         pass
     finally:
         if rclpy.ok():
-            if node._display_available:
-                cv2.destroyAllWindows()
+            destroy_opencv_windows(node.show_window, node._display_available)
             node.destroy_node()
             rclpy.shutdown()
