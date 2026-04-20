@@ -354,14 +354,14 @@ ros2 component types | grep -i Rectify
 
 ## 4. Export Camera Serials Instead of Hard-Coding Them
 
-Run this in the host terminal before launching either camera:
+Run this in the host terminal before launching either camera. Use `source`, not `./...`, so the exported variables stay in your current shell:
 
 ```bash
 export ROS2_WS=$HOME/ros2_ws
 source ./scripts/export_realsense_serials.sh
 ```
 
-The script checks `/usr/local/bin/rs-enumerate-devices -s` before sourcing ROS, unsets old values first, exports raw serial numbers with no leading underscore, and prints a clear message when a D405 or D435i is not detected.
+The script checks `/usr/local/bin/rs-enumerate-devices -s` before sourcing ROS, parses the serial number column from that command's table output, unsets old values first, exports raw serial numbers with no leading underscore, and prints a clear message when a D405 or D435i is not detected.
 
 Add the underscore only when passing `serial_no` to ROS, for example:
 
@@ -407,22 +407,20 @@ mkdir -p ${RESULTS_DIR}
 
 In each host terminal below:
 
-1. source the host ROS environment
-2. define the `export_realsense_serials` helper from Section 4 if this is a fresh shell
-3. run `export_realsense_serials`
+1. set `ROS2_WS`
+2. source `./scripts/export_realsense_serials.sh`
+3. launch the camera node with `-p serial_no:=_${...}`
 
 Host terminal 1, D405:
 
 ```bash
 export ROS2_WS=$HOME/ros2_ws
-source /opt/ros/humble/setup.bash
-source ${ROS2_WS}/install/setup.bash
-export_realsense_serials
+source ./scripts/export_realsense_serials.sh
 
 ros2 run realsense2_camera realsense2_camera_node --ros-args \
   -r __ns:=/d405 \
   -p camera_name:=d405 \
-  -p serial_no:=${D405_SERIAL} \
+  -p serial_no:=_${D405_SERIAL} \
   -p enable_color:=true \
   -p enable_depth:=true \
   -p enable_infra1:=false \
@@ -437,14 +435,12 @@ Host terminal 2, D435i:
 
 ```bash
 export ROS2_WS=$HOME/ros2_ws
-source /opt/ros/humble/setup.bash
-source ${ROS2_WS}/install/setup.bash
-export_realsense_serials
+source ./scripts/export_realsense_serials.sh
 
 ros2 run realsense2_camera realsense2_camera_node --ros-args \
   -r __ns:=/d435i \
   -p camera_name:=d435i \
-  -p serial_no:=${D435I_SERIAL} \
+  -p serial_no:=_${D435I_SERIAL} \
   -p enable_color:=true \
   -p enable_depth:=true \
   -p enable_infra1:=false \
@@ -542,14 +538,12 @@ Host terminal, D405 color stream only:
 
 ```bash
 export ROS2_WS=$HOME/ros2_ws
-source /opt/ros/humble/setup.bash
-source ${ROS2_WS}/install/setup.bash
-export_realsense_serials
+source ./scripts/export_realsense_serials.sh
 
 ros2 run realsense2_camera realsense2_camera_node --ros-args \
   -r __ns:=/d405 \
   -p camera_name:=d405 \
-  -p serial_no:=${D405_SERIAL} \
+  -p serial_no:=_${D405_SERIAL} \
   -p enable_color:=true \
   -p enable_depth:=false \
   -p enable_infra1:=false \
@@ -627,14 +621,12 @@ Host terminal, D435i with aligned depth enabled:
 
 ```bash
 export ROS2_WS=$HOME/ros2_ws
-source /opt/ros/humble/setup.bash
-source ${ROS2_WS}/install/setup.bash
-export_realsense_serials
+source ./scripts/export_realsense_serials.sh
 
 ros2 run realsense2_camera realsense2_camera_node --ros-args \
   -r __ns:=/d435i \
   -p camera_name:=d435i \
-  -p serial_no:=${D435I_SERIAL} \
+  -p serial_no:=_${D435I_SERIAL} \
   -p enable_color:=true \
   -p enable_depth:=true \
   -p enable_infra1:=false \
@@ -670,19 +662,20 @@ Useful outputs:
 
 ## 6. Troubleshooting
 
-### 6.1 `rs-enumerate-devices` works but the serial variables are empty
+### 6.1 Automatic detection fails but `rs-enumerate-devices -s` works
 
-Run:
+Export the raw serial numbers manually:
 
 ```bash
-rs-enumerate-devices
+export D405_SERIAL=YOUR_D405_SERIAL
+export D435I_SERIAL=YOUR_D435I_SERIAL
 ```
 
-Then export the values manually, keeping the leading underscore:
+Add the underscore only when passing `serial_no` to ROS:
 
 ```bash
-export D405_SERIAL=_YOUR_D405_SERIAL
-export D435I_SERIAL=_YOUR_D435I_SERIAL
+-p serial_no:=_${D405_SERIAL}
+-p serial_no:=_${D435I_SERIAL}
 ```
 
 ### 6.2 `realsense-ros` fails to build because of `Documents/librealsense2/presets`
