@@ -354,61 +354,16 @@ ros2 component types | grep -i Rectify
 
 ## 4. Export Camera Serials Instead of Hard-Coding Them
 
-Run this in the host terminal before launching either camera. It uses `/usr/local/bin/rs-enumerate-devices -s` first, so ROS does not override the RealSense binary on this system.
+Run this in the host terminal before launching either camera:
 
 ```bash
 export ROS2_WS=$HOME/ros2_ws
-
-export_realsense_serials() {
-  unset D405_SERIAL
-  unset D435I_SERIAL
-
-  local rs_output
-  if ! rs_output=$(/usr/local/bin/rs-enumerate-devices -s 2>/dev/null); then
-    echo "Failed to run /usr/local/bin/rs-enumerate-devices -s"
-    echo "D405 not detected."
-    echo "D435i not detected."
-  else
-    eval "$(
-      printf '%s\n' "$rs_output" | awk -F': *' '
-        BEGIN { IGNORECASE=1 }
-        /^[[:space:]]*(Device )?Name[[:space:]]*:/ {
-          name=$2
-          gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
-        }
-        /^[[:space:]]*Serial Number[[:space:]]*:/ {
-          serial=$2
-          gsub(/^[[:space:]]+|[[:space:]]+$/, "", serial)
-
-          if (name ~ /D405/) {
-            print "export D405_SERIAL=" serial
-          } else if (name ~ /D435[iI]/) {
-            print "export D435I_SERIAL=" serial
-          }
-        }
-      '
-    )"
-
-    if [ -n "${D405_SERIAL:-}" ]; then
-      echo "Detected D405 serial: ${D405_SERIAL}"
-    else
-      echo "D405 not detected."
-    fi
-
-    if [ -n "${D435I_SERIAL:-}" ]; then
-      echo "Detected D435i serial: ${D435I_SERIAL}"
-    else
-      echo "D435i not detected."
-    fi
-  fi
-}
-export_realsense_serials
-
-source /opt/ros/humble/setup.bash
-source ${ROS2_WS}/install/setup.bash
+source ./scripts/export_realsense_serials.sh
 ```
 
-The exported values are the raw serial numbers with no leading underscore. Add the underscore only when passing `serial_no` to ROS, for example:
+The script checks `/usr/local/bin/rs-enumerate-devices -s` before sourcing ROS, unsets old values first, exports raw serial numbers with no leading underscore, and prints a clear message when a D405 or D435i is not detected.
+
+Add the underscore only when passing `serial_no` to ROS, for example:
 
 ```bash
 -p serial_no:=_${D435I_SERIAL}
