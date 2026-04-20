@@ -354,48 +354,71 @@ ros2 component types | grep -i Rectify
 
 ## 4. Export Camera Serials Instead of Hard-Coding Them
 
-This avoids copy/pasting commands with the wrong serial number.
-
-Paste this into any host terminal where you will launch a RealSense camera:
+Run this in the host terminal before launching either camera. It uses `/usr/local/bin/rs-enumerate-devices -s` first, so ROS does not override the RealSense binary on this system.
 
 ```bash
 export ROS2_WS=$HOME/ros2_ws
-source /opt/ros/humble/setup.bash
-source ${ROS2_WS}/install/setup.bash
 
 export_realsense_serials() {
-  eval "$(
-    rs-enumerate-devices | awk -F': ' '
-      /^[[:space:]]*Name[[:space:]]*:/ {
-        name=$2
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
-      }
-      /^[[:space:]]*Serial Number[[:space:]]*:/ {
-        serial=$2
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "", serial)
-        if (name ~ /D405/) print "export D405_SERIAL=_" serial
-        if (name ~ /D435I|D435i/) print "export D435I_SERIAL=_" serial
-      }
-    '
-  )"
+  unset D405_SERIAL
+  unset D435I_SERIAL
 
-  printf 'D405_SERIAL=%s\nD435I_SERIAL=%s\n' "$D405_SERIAL" "$D435I_SERIAL"
+  local rs_output
+  if ! rs_output=$(/usr/local/bin/rs-enumerate-devices -s 2>/dev/null); then
+    echo "Failed to run /usr/local/bin/rs-enumerate-devices -s"
+    echo "D405 not detected."
+    echo "D435i not detected."
+  else
+    eval "$(
+      printf '%s\n' "$rs_output" | awk -F': *' '
+        BEGIN { IGNORECASE=1 }
+        /^[[:space:]]*(Device )?Name[[:space:]]*:/ {
+          name=$2
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+        }
+        /^[[:space:]]*Serial Number[[:space:]]*:/ {
+          serial=$2
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", serial)
+
+          if (name ~ /D405/) {
+            print "export D405_SERIAL=" serial
+          } else if (name ~ /D435[iI]/) {
+            print "export D435I_SERIAL=" serial
+          }
+        }
+      '
+    )"
+
+    if [ -n "${D405_SERIAL:-}" ]; then
+      echo "Detected D405 serial: ${D405_SERIAL}"
+    else
+      echo "D405 not detected."
+    fi
+
+    if [ -n "${D435I_SERIAL:-}" ]; then
+      echo "Detected D435i serial: ${D435I_SERIAL}"
+    else
+      echo "D435i not detected."
+    fi
+  fi
 }
-```
-
-Then run:
-
-```bash
 export_realsense_serials
+
+source /opt/ros/humble/setup.bash
+source ${ROS2_WS}/install/setup.bash
 ```
 
-If a value is empty, inspect the raw device list and export it manually:
+The exported values are the raw serial numbers with no leading underscore. Add the underscore only when passing `serial_no` to ROS, for example:
 
 ```bash
-rs-enumerate-devices
+-p serial_no:=_${D435I_SERIAL}
+```
 
-export D405_SERIAL=_YOUR_D405_SERIAL
-export D435I_SERIAL=_YOUR_D435I_SERIAL
+If automatic detection fails, set the values manually:
+
+```bash
+export D405_SERIAL=YOUR_D405_SERIAL
+export D435I_SERIAL=YOUR_D435I_SERIAL
 ```
 
 ## 5. Daily Runtime Commands
