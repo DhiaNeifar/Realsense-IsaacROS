@@ -213,11 +213,18 @@ groups
 
 The final Isaac ROS workspace should be flat. That means the contents of this repository live directly under `${ISAAC_ROS_WS}/src`, not under a nested `Realsense-IsaacROS` folder.
 
+The Isaac ROS helper script used in the next step expects `${ISAAC_ROS_WS}` itself to be a Git/LFS-enabled workspace root. Initialize that first, then copy the repository contents into `${ISAAC_ROS_WS}/src`.
+
 Run this on the host:
 
 ```bash
 export ISAAC_ROS_WS=$HOME/workspaces/isaac_ros-dev
 export ISAAC_ROS_SRC=$ISAAC_ROS_WS/src
+
+mkdir -p ${ISAAC_ROS_WS}
+cd ${ISAAC_ROS_WS}
+git init
+git lfs install --local
 
 cd ${ISAAC_ROS_SRC}
 git clone --recurse-submodules https://github.com/DhiaNeifar/Realsense-IsaacROS.git temp_repo
@@ -257,6 +264,8 @@ echo CONFIG_IMAGE_KEY=ros2_humble.realsense > .isaac_ros_common-config
 ```
 
 Launch the dev container from the host:
+
+The previous step initialized `${ISAAC_ROS_WS}` as a Git/LFS workspace root. Keep that `.git` directory in place. `isaac_ros_common/scripts/run_dev.sh` checks Git LFS from `${ISAAC_ROS_WS}` and may exit early if the workspace root is not a Git repository.
 
 ```bash
 cd ${ISAAC_ROS_SRC}/isaac_ros_common
