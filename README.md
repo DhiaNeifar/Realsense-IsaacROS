@@ -13,7 +13,7 @@ The workflow is split across two environments:
   - `isaac_ros_nitros`
   - `isaac_ros_image_pipeline`
   - `realsense_benchmark`
-  - `floor_box_perception`
+  - `floor_object_detection`
 
 The goal is that a new team member can:
 
@@ -40,13 +40,19 @@ Important workspace rule:
 - `realsense-ros` is built on the host in `~/ros2_ws`
 - Isaac ROS and the custom packages are built inside `~/workspaces/isaac_ros-dev`
 - inside the Isaac ROS workspace, the repository contents are copied directly into `src`
-- after setup, you should have directories such as `isaac_ros_common`, `isaac_ros_nitros`, `isaac_ros_image_pipeline`, `realsense_benchmark`, and `floor_box_perception` directly under `${ISAAC_ROS_WS}/src`
+- after setup, you should have directories such as `isaac_ros_common`, `isaac_ros_nitros`, `isaac_ros_image_pipeline`, `realsense_benchmark`, and `floor_object_detection` directly under `${ISAAC_ROS_WS}/src`
 - there should not be an extra `${ISAAC_ROS_WS}/src/Realsense-IsaacROS` directory in the final Isaac ROS workspace
 
 Throughout this README:
 
 - "host terminal" means your normal machine terminal
 - "container terminal" means a shell inside the Isaac ROS dev container
+
+Shell variable rule:
+
+- run the host exports once per new host shell
+- run the container exports once per new container shell
+- if a later section says "host terminal" or "container terminal", it assumes those variables are already set in that shell unless the command block says otherwise
 
 ## 2. One-Time Host Setup
 
@@ -55,6 +61,7 @@ Throughout this README:
 Run this in a host terminal:
 
 ```bash
+# Host shell only
 export ROS2_WS=$HOME/ros2_ws
 export ISAAC_ROS_WS=$HOME/workspaces/isaac_ros-dev
 export ISAAC_ROS_SRC=$ISAAC_ROS_WS/src
@@ -182,6 +189,7 @@ ros2 pkg list | grep realsense2_camera
 ### 3.1 Prepare the Isaac ROS workspace on the host
 
 ```bash
+# Host shell only
 export ISAAC_ROS_WS=$HOME/workspaces/isaac_ros-dev
 export ISAAC_ROS_SRC=$ISAAC_ROS_WS/src
 
@@ -196,9 +204,12 @@ mkdir -p ${ISAAC_ROS_SRC}
 Optional convenience step:
 
 ```bash
+grep -qxF 'export ROS2_WS=${HOME}/ros2_ws' ~/.bashrc || \
+  echo 'export ROS2_WS=${HOME}/ros2_ws' >> ~/.bashrc
 grep -qxF 'export ISAAC_ROS_WS=${HOME}/workspaces/isaac_ros-dev' ~/.bashrc || \
   echo 'export ISAAC_ROS_WS=${HOME}/workspaces/isaac_ros-dev' >> ~/.bashrc
 source ~/.bashrc
+export ISAAC_ROS_SRC=$ISAAC_ROS_WS/src
 ```
 
 If Docker access is not already configured for your user:
@@ -218,6 +229,7 @@ The Isaac ROS helper script used in the next step expects `${ISAAC_ROS_WS}` itse
 Run this on the host:
 
 ```bash
+# Host shell only
 export ISAAC_ROS_WS=$HOME/workspaces/isaac_ros-dev
 export ISAAC_ROS_SRC=$ISAAC_ROS_WS/src
 
@@ -239,7 +251,7 @@ After the copy, these directories should exist directly under `${ISAAC_ROS_SRC}`
 - `isaac_ros_nitros`
 - `isaac_ros_image_pipeline`
 - `realsense_benchmark`
-- `floor_box_perception`
+- `floor_object_detection`
 
 If an extra `${ISAAC_ROS_SRC}/Realsense-IsaacROS` folder exists from an older setup, remove it:
 
@@ -255,6 +267,7 @@ fi
 Create the Isaac ROS container config on the host:
 
 ```bash
+# Host shell only
 export ISAAC_ROS_WS=$HOME/workspaces/isaac_ros-dev
 export ISAAC_ROS_SRC=$ISAAC_ROS_WS/src
 
@@ -283,6 +296,7 @@ Inside the container, the workspace path is:
 Run this in a container terminal:
 
 ```bash
+# Container shell only
 export ISAAC_ROS_WS=/workspaces/isaac_ros-dev
 export ISAAC_ROS_SRC=${ISAAC_ROS_WS}/src
 export RESULTS_DIR=${ISAAC_ROS_SRC}/realsense_benchmark/results
@@ -297,6 +311,7 @@ rosdep install --from-paths src --ignore-src -r -y
 sudo apt-get install -y \
   ros-humble-magic-enum \
   ros-humble-foxglove-msgs \
+  ros-humble-vision-msgs \
   python3-opencv \
   python3-numpy \
   python3-matplotlib
@@ -316,6 +331,7 @@ rosdep install --from-paths src --ignore-src -r -y
 sudo apt-get install -y \
   ros-humble-magic-enum \
   ros-humble-foxglove-msgs \
+  ros-humble-vision-msgs \
   python3-opencv \
   python3-numpy \
   python3-matplotlib
@@ -326,6 +342,7 @@ sudo apt-get install -y \
 Before building, make sure there is no duplicate `Realsense-IsaacROS` directory inside `src`:
 
 ```bash
+# Container shell only
 export ISAAC_ROS_WS=/workspaces/isaac_ros-dev
 export ISAAC_ROS_SRC=${ISAAC_ROS_WS}/src
 
@@ -348,7 +365,7 @@ source ${ISAAC_ROS_WS}/install/setup.bash
 colcon build --packages-up-to isaac_ros_image_proc --symlink-install --cmake-args -DBUILD_TESTING=OFF
 source ${ISAAC_ROS_WS}/install/setup.bash
 
-colcon build --packages-select realsense_benchmark floor_box_perception --symlink-install
+colcon build --packages-select realsense_benchmark floor_object_detection --symlink-install
 source ${ISAAC_ROS_WS}/install/setup.bash
 ```
 
@@ -360,7 +377,7 @@ Why the second Isaac ROS build matters:
 Verify that the packages are visible:
 
 ```bash
-ros2 pkg list | grep -E 'isaac_ros_image_proc|realsense_benchmark|floor_box_perception'
+ros2 pkg list | grep -E 'isaac_ros_image_proc|realsense_benchmark|floor_object_detection'
 ros2 component types | grep -i Rectify
 ```
 
@@ -395,9 +412,6 @@ export D435I_SERIAL=YOUR_D435I_SERIAL
 Host terminal:
 
 ```bash
-export ISAAC_ROS_WS=$HOME/workspaces/isaac_ros-dev
-export ISAAC_ROS_SRC=$ISAAC_ROS_WS/src
-
 cd ${ISAAC_ROS_SRC}/isaac_ros_common
 ./scripts/run_dev.sh -d ${ISAAC_ROS_WS}
 ```
@@ -405,10 +419,6 @@ cd ${ISAAC_ROS_SRC}/isaac_ros_common
 Container terminal setup:
 
 ```bash
-export ISAAC_ROS_WS=/workspaces/isaac_ros-dev
-export ISAAC_ROS_SRC=${ISAAC_ROS_WS}/src
-export RESULTS_DIR=${ISAAC_ROS_SRC}/realsense_benchmark/results
-
 cd ${ISAAC_ROS_WS}
 source /opt/ros/humble/setup.bash
 source install/setup.bash
@@ -426,7 +436,6 @@ In each host terminal below:
 Host terminal 1, D405:
 
 ```bash
-export ROS2_WS=$HOME/ros2_ws
 source ./scripts/export_realsense_serials.sh
 
 ros2 run realsense2_camera realsense2_camera_node --ros-args \
@@ -446,7 +455,6 @@ ros2 run realsense2_camera realsense2_camera_node --ros-args \
 Host terminal 2, D435i:
 
 ```bash
-export ROS2_WS=$HOME/ros2_ws
 source ./scripts/export_realsense_serials.sh
 
 ros2 run realsense2_camera realsense2_camera_node --ros-args \
@@ -468,7 +476,6 @@ ros2 run realsense2_camera realsense2_camera_node --ros-args \
 Host terminal 3, RViz2:
 
 ```bash
-export ROS2_WS=$HOME/ros2_ws
 source /opt/ros/humble/setup.bash
 source ${ROS2_WS}/install/setup.bash
 rviz2
@@ -494,10 +501,6 @@ These commands assume the D435i camera is already running on the host.
 Container terminal:
 
 ```bash
-export ISAAC_ROS_WS=/workspaces/isaac_ros-dev
-export ISAAC_ROS_SRC=${ISAAC_ROS_WS}/src
-export RESULTS_DIR=${ISAAC_ROS_SRC}/realsense_benchmark/results
-
 cd ${ISAAC_ROS_WS}
 source /opt/ros/humble/setup.bash
 source install/setup.bash
@@ -549,7 +552,6 @@ Notes:
 Host terminal, D405 color stream only:
 
 ```bash
-export ROS2_WS=$HOME/ros2_ws
 source ./scripts/export_realsense_serials.sh
 
 ros2 run realsense2_camera realsense2_camera_node --ros-args \
@@ -575,7 +577,6 @@ ls -ld /tmp /tmp/isaac_ros_nitros
 Container terminal 2, start the component container:
 
 ```bash
-export ISAAC_ROS_WS=/workspaces/isaac_ros-dev
 cd ${ISAAC_ROS_WS}
 source /opt/ros/humble/setup.bash
 source install/setup.bash
@@ -586,7 +587,6 @@ ros2 run rclcpp_components component_container_mt --ros-args -r __node:=nitros_r
 Container terminal 3, load `RectifyNode`:
 
 ```bash
-export ISAAC_ROS_WS=/workspaces/isaac_ros-dev
 cd ${ISAAC_ROS_WS}
 source /opt/ros/humble/setup.bash
 source install/setup.bash
@@ -604,7 +604,6 @@ ros2 component load /nitros_rectify_container isaac_ros_image_proc nvidia::isaac
 Host terminal, confirm that the negotiated topic exists:
 
 ```bash
-export ROS2_WS=$HOME/ros2_ws
 source /opt/ros/humble/setup.bash
 source ${ROS2_WS}/install/setup.bash
 
@@ -627,12 +626,11 @@ Add this image topic:
 
 - `/d405/camera/color/image_rect`
 
-### 5.5 Run the floor box perception demo
+### 5.5 Run the floor object detector demo
 
 Host terminal, D435i with aligned depth enabled:
 
 ```bash
-export ROS2_WS=$HOME/ros2_ws
 source ./scripts/export_realsense_serials.sh
 
 ros2 run realsense2_camera realsense2_camera_node --ros-args \
@@ -654,23 +652,31 @@ ros2 run realsense2_camera realsense2_camera_node --ros-args \
 Container terminal, run the detector:
 
 ```bash
-export ISAAC_ROS_WS=/workspaces/isaac_ros-dev
 cd ${ISAAC_ROS_WS}
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 
-ros2 run floor_box_perception box_floor_detector --ros-args \
-  -p color_topic:=/d435i/camera/color/image_raw \
-  -p depth_topic:=/d435i/camera/aligned_depth_to_color/image_raw \
-  -p camera_info_topic:=/d435i/camera/color/camera_info \
-  -p show_debug_window:=true
+ros2 launch floor_object_detection detector.launch.py \
+  color_topic:=/d435i/camera/color/image_raw \
+  depth_topic:=/d435i/camera/aligned_depth_to_color/image_raw \
+  camera_info_topic:=/d435i/camera/color/camera_info \
+  show_debug_window:=true
 ```
 
 Useful outputs:
 
-- `/box_detection/debug_image`
-- `/box_detection/mask`
-- `/box_detection/distance`
+- `/floor_object_detector/debug_image`
+- `/floor_object_detector/foreground_mask`
+- `/floor_object_detector/floor_mask`
+- `/floor_object_detector/detections_2d`
+- `/floor_object_detector/distance`
+
+If you run the D435i with `-p align_depth.enable:=false`, switch the detector input to raw depth:
+
+```bash
+ros2 launch floor_object_detection detector.launch.py \
+  depth_topic:=/d435i/camera/depth/image_rect_raw
+```
 
 ## 6. Troubleshooting
 
@@ -722,6 +728,7 @@ rosdep install --from-paths src --ignore-src -r -y
 sudo apt-get install -y \
   ros-humble-magic-enum \
   ros-humble-foxglove-msgs \
+  ros-humble-vision-msgs \
   python3-opencv \
   python3-numpy \
   python3-matplotlib
@@ -750,7 +757,7 @@ colcon build --packages-up-to isaac_ros_nitros --symlink-install --cmake-args -D
 source install/setup.bash
 colcon build --packages-up-to isaac_ros_image_proc --symlink-install --cmake-args -DBUILD_TESTING=OFF
 source install/setup.bash
-colcon build --packages-select realsense_benchmark floor_box_perception --symlink-install
+colcon build --packages-select realsense_benchmark floor_object_detection --symlink-install
 source install/setup.bash
 ```
 
@@ -772,10 +779,27 @@ sudo chmod -R 777 /tmp/isaac_ros_nitros
 
 ### 6.6 GUI windows do not open in the container
 
-If you are running headless or without GUI forwarding, set:
+If you are running headless or without GUI forwarding:
 
 ```bash
--p show_window:=false
+ros2 run realsense_benchmark phase_benchmark_node --ros-args -p show_window:=false
+ros2 run realsense_benchmark detection_benchmark_node --ros-args -p show_window:=false
+ros2 launch floor_object_detection detector.launch.py show_debug_window:=false
 ```
 
-for the benchmark and floor-perception nodes.
+### 6.7 Isaac ROS container fails with `unresolvable CDI devices nvidia.com/gpu=all`
+
+On Jetson, regenerate the NVIDIA CDI spec on the host and restart Docker:
+
+```bash
+sudo mkdir -p /etc/cdi
+sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+sudo systemctl restart docker
+```
+
+Then retry:
+
+```bash
+cd ${ISAAC_ROS_SRC}/isaac_ros_common
+./scripts/run_dev.sh -d ${ISAAC_ROS_WS}
+```
