@@ -93,7 +93,7 @@ cd ${ROS2_WS}
 Version used here: `v2.55.1`
 
 ```bash
-cd ${ROS2_WS}
+cd ~
 git clone https://github.com/IntelRealSense/librealsense.git
 cd librealsense
 git checkout v2.55.1
@@ -125,6 +125,9 @@ First clone the ROS wrapper:
 ```bash
 cd ${ROS2_WS}/src
 git clone -b ros2-master https://github.com/IntelRealSense/realsense-ros.git
+cd ~/ros2_ws/src/realsense-ros
+git fetch --tags
+git checkout 4.55.1
 ```
 
 Then build it on the host:
