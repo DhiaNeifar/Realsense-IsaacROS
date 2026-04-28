@@ -26,6 +26,12 @@ def draw_debug_image(
         floor_overlay[:, :, 0] = detection_frame.floor_mask
         rgb_panel = cv2.addWeighted(rgb_panel, 1.0, floor_overlay, 0.15, 0.0)
 
+    if detection_frame.ignore_mask.size > 0 and np.count_nonzero(detection_frame.ignore_mask) > 0:
+        ignore_overlay = np.zeros_like(rgb_panel)
+        ignore_overlay[:, :, 2] = detection_frame.ignore_mask
+        rgb_panel = cv2.addWeighted(rgb_panel, 1.0, ignore_overlay, 0.25, 0.0)
+        edge_panel = cv2.addWeighted(edge_panel, 1.0, ignore_overlay, 0.20, 0.0)
+
     if detection_frame.foreground_mask.size > 0:
         foreground_overlay = np.zeros_like(rgb_panel)
         foreground_overlay[:, :, 1] = detection_frame.foreground_mask
@@ -34,9 +40,29 @@ def draw_debug_image(
         edge_overlay[:, :, 1] = detection_frame.foreground_mask
         edge_panel = cv2.addWeighted(edge_panel, 1.0, edge_overlay, 0.35, 0.0)
 
+    for index, item in enumerate(detection_frame.candidate_scores[:5]):
+        x, y, w, h = item["bbox"]
+        color = (255, 180, 0) if index > 0 else (0, 255, 255)
+        thickness = 2 if index == 0 else 1
+        cv2.rectangle(edge_panel, (x, y), (x + w, y + h), color, thickness)
+        cv2.putText(
+            edge_panel,
+            f"{float(item['score']):.0f}",
+            (x, max(18, y - 5)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            color,
+            1,
+            cv2.LINE_AA,
+        )
+
     if tracked_detection is not None:
         x, y, w, h = [int(round(v)) for v in tracked_detection.bbox]
         color = (0, 255, 0) if not tracked_detection.stale else (0, 200, 255)
+        if detection_frame.candidate is not None:
+            cv2.drawContours(rgb_panel, [detection_frame.candidate.contour], -1, color, 2)
+            cv2.drawContours(depth_panel, [detection_frame.candidate.contour], -1, color, 2)
+            cv2.drawContours(edge_panel, [detection_frame.candidate.contour], -1, color, 2)
         if rgb_detection is not None:
             rx, ry, rw, rh = [int(round(v)) for v in rgb_detection.bbox]
             cv2.rectangle(rgb_panel, (rx, ry), (rx + rw, ry + rh), color, 2)
@@ -58,6 +84,7 @@ def draw_debug_image(
             f"conf={tracked_detection.confidence:.2f}"
         )
         line_2 = f"{detection_frame.status_text} | {status}"
+        line_3 = score_summary(detection_frame)
         if rgb_detection is not None:
             cv2.putText(
                 rgb_panel,
@@ -79,12 +106,30 @@ def draw_debug_image(
                 2,
                 cv2.LINE_AA,
             )
+            if line_3:
+                cv2.putText(
+                    rgb_panel,
+                    line_3,
+                    (rx, ry + rh + 44),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    color,
+                    1,
+                    cv2.LINE_AA,
+                )
         cv2.putText(depth_panel, line_1, (x, max(24, y - 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA)
         cv2.putText(depth_panel, line_2, (x, y + h + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.50, color, 2, cv2.LINE_AA)
+        if line_3:
+            cv2.putText(depth_panel, line_3, (x, y + h + 44), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
         cv2.putText(edge_panel, line_1, (x, max(24, y - 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2, cv2.LINE_AA)
         cv2.putText(edge_panel, line_2, (x, y + h + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.50, color, 2, cv2.LINE_AA)
+        if line_3:
+            cv2.putText(edge_panel, line_3, (x, y + h + 44), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
     elif detection_frame.candidate is not None:
         x, y, w, h = detection_frame.candidate.bbox
+        cv2.drawContours(rgb_panel, [detection_frame.candidate.contour], -1, (0, 200, 255), 2)
+        cv2.drawContours(depth_panel, [detection_frame.candidate.contour], -1, (0, 200, 255), 2)
+        cv2.drawContours(edge_panel, [detection_frame.candidate.contour], -1, (0, 200, 255), 2)
         cv2.rectangle(rgb_panel, (x, y), (x + w, y + h), (0, 200, 255), 2)
         cv2.rectangle(depth_panel, (x, y), (x + w, y + h), (0, 200, 255), 2)
         cv2.rectangle(edge_panel, (x, y), (x + w, y + h), (0, 200, 255), 2)
@@ -118,6 +163,11 @@ def draw_debug_image(
             2,
             cv2.LINE_AA,
         )
+        line_3 = score_summary(detection_frame)
+        if line_3:
+            draw_small_text(rgb_panel, line_3, (x, y + h + 22), (0, 200, 255))
+            draw_small_text(depth_panel, line_3, (x, y + h + 22), (0, 200, 255))
+            draw_small_text(edge_panel, line_3, (x, y + h + 22), (0, 200, 255))
 
     annotate_panel(
         rgb_panel,
@@ -132,6 +182,7 @@ def draw_debug_image(
         [
             "Depth",
             "colormap: TURBO",
+            f"valid px: {int(np.count_nonzero(detection_frame.valid_depth_mask))}",
             f"foreground px: {int(np.count_nonzero(detection_frame.foreground_mask))}",
         ],
     )
@@ -140,6 +191,7 @@ def draw_debug_image(
         [
             "Edges",
             f"edge px: {int(np.count_nonzero(detection_frame.edge_mask))}",
+            f"ignore px: {int(np.count_nonzero(detection_frame.ignore_mask))}",
             f"candidate: {'yes' if detection_frame.candidate is not None else 'no'}",
         ],
     )
@@ -194,6 +246,24 @@ def annotate_panel(image: np.ndarray, lines: list[str]) -> None:
     for line in lines:
         cv2.putText(image, line, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.60, (255, 255, 255), 2, cv2.LINE_AA)
         y += 24
+
+
+def draw_small_text(image: np.ndarray, text: str, origin: tuple[int, int], color: tuple[int, int, int]) -> None:
+    cv2.putText(image, text, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+
+
+def score_summary(detection_frame: DetectionFrame) -> str:
+    candidate = detection_frame.candidate
+    if candidate is None or not candidate.score_components:
+        return ""
+    components = candidate.score_components
+    return (
+        f"score={candidate.score:.1f} "
+        f"g={components['geometry']:.2f} "
+        f"c={components['color']:.2f} "
+        f"e={components['edge']:.2f} "
+        f"ctr={components['center']:.2f}"
+    )
 
 
 def create_marker_array(

@@ -120,6 +120,23 @@ Candidate filtering parameters:
 - `open_kernel_size` (`3`)
 - `close_kernel_size` (`5`)
 - `point_depth_window` (`5`)
+- `use_ignore_mask` (`true`)
+- `ignore_regions_normalized` (`[0.00, 0.55, 0.16, 1.00, 0.84, 0.55, 1.00, 1.00]`)
+- `min_candidate_area_ratio` (`0.0008`)
+- `max_candidate_area_ratio` (`0.35`)
+- `min_depth_support_ratio` (`0.35`)
+- `center_prior_weight` (`0.12`)
+- `color_score_weight` (`0.22`)
+- `edge_score_weight` (`0.16`)
+- `geometry_score_weight` (`0.42`)
+- `temporal_score_weight` (`0.08`)
+- `auto_canny_sigma` (`0.33`)
+- `debug_candidate_scores` (`false`)
+
+The detector uses depth/floor geometry as the primary object mask. Candidate ranking combines geometry,
+depth consistency, Lab color contrast from the estimated floor color, adaptive edge support, temporal
+consistency, and a soft center prior. The normalized ignore regions are optional and are intended to
+suppress robot-arm/gripper areas near the image sides without changing any published ROS interfaces.
 
 Tracking parameters:
 

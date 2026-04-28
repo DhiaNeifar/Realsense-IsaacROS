@@ -29,6 +29,7 @@ class FloorObjectDetectorNode(Node):
         self._depth_camera_info: CameraInfo | None = None
         self._window_disabled = False
         self._last_log_ns = 0
+        self._last_candidate_score_log_ns = 0
         self._last_published_log_ns = 0
         self._last_pipeline_error_ns = 0
         self._latest_display_image: np.ndarray | None = None
@@ -64,6 +65,24 @@ class FloorObjectDetectorNode(Node):
         self.declare_parameter("open_kernel_size", 3)
         self.declare_parameter("close_kernel_size", 5)
         self.declare_parameter("point_depth_window", 5)
+        self.declare_parameter("use_ignore_mask", True)
+        self.declare_parameter(
+            "ignore_regions_normalized",
+            [
+                0.00, 0.55, 0.16, 1.00,
+                0.84, 0.55, 1.00, 1.00,
+            ],
+        )
+        self.declare_parameter("center_prior_weight", 0.12)
+        self.declare_parameter("color_score_weight", 0.22)
+        self.declare_parameter("edge_score_weight", 0.16)
+        self.declare_parameter("geometry_score_weight", 0.42)
+        self.declare_parameter("temporal_score_weight", 0.08)
+        self.declare_parameter("auto_canny_sigma", 0.33)
+        self.declare_parameter("min_candidate_area_ratio", 0.0008)
+        self.declare_parameter("max_candidate_area_ratio", 0.35)
+        self.declare_parameter("min_depth_support_ratio", 0.35)
+        self.declare_parameter("debug_candidate_scores", False)
         self.declare_parameter("min_confirmed_frames", 1)
         self.declare_parameter("max_missed_frames", 4)
         self.declare_parameter("bbox_smoothing_alpha", 0.18)
@@ -126,6 +145,18 @@ class FloorObjectDetectorNode(Node):
             open_kernel_size=int(self.get_parameter("open_kernel_size").value),
             close_kernel_size=int(self.get_parameter("close_kernel_size").value),
             point_depth_window=int(self.get_parameter("point_depth_window").value),
+            use_ignore_mask=bool(self.get_parameter("use_ignore_mask").value),
+            ignore_regions_normalized=list(self.get_parameter("ignore_regions_normalized").value),
+            center_prior_weight=float(self.get_parameter("center_prior_weight").value),
+            color_score_weight=float(self.get_parameter("color_score_weight").value),
+            edge_score_weight=float(self.get_parameter("edge_score_weight").value),
+            geometry_score_weight=float(self.get_parameter("geometry_score_weight").value),
+            temporal_score_weight=float(self.get_parameter("temporal_score_weight").value),
+            auto_canny_sigma=float(self.get_parameter("auto_canny_sigma").value),
+            min_candidate_area_ratio=float(self.get_parameter("min_candidate_area_ratio").value),
+            max_candidate_area_ratio=float(self.get_parameter("max_candidate_area_ratio").value),
+            min_depth_support_ratio=float(self.get_parameter("min_depth_support_ratio").value),
+            debug_candidate_scores=bool(self.get_parameter("debug_candidate_scores").value),
         )
 
         self.tracker = TemporalDetectionTracker(
@@ -276,7 +307,9 @@ class FloorObjectDetectorNode(Node):
             )
             self._latest_display_image = debug_image
             self.publish_debug_outputs(debug_image, detection_frame, color_msg.header)
-            self.publish_detection_outputs(rgb_tracked_detection if rgb_tracked_detection is not None else tracked_detection, color_msg.header)
+            output_detection = rgb_tracked_detection if rgb_tracked_detection is not None else tracked_detection
+            self.publish_detection_outputs(output_detection, color_msg.header)
+            self.log_candidate_scores(detection_frame)
             self.log_detection(tracked_detection)
         except Exception as exc:
             self.publish_pipeline_error(color, color_msg.header, exc)
@@ -478,7 +511,11 @@ class FloorObjectDetectorNode(Node):
         right_xyz = tracked_detection.right_xyz
         if right_xyz is not None:
             right_xyz = self.transform_depth_point_to_color(right_xyz)
-        projected_center = self.project_color_point(center_xyz, color_intrinsics, color_shape) if center_xyz is not None else None
+        projected_center = (
+            self.project_color_point(center_xyz, color_intrinsics, color_shape)
+            if center_xyz is not None
+            else None
+        )
         if projected_center is None:
             projected_center = (bbox_x + bbox_w * 0.5, bbox_y + bbox_h * 0.5)
 
@@ -510,7 +547,11 @@ class FloorObjectDetectorNode(Node):
         u = int(round(np.clip(pixel[0], 0, depth_m.shape[1] - 1)))
         v = int(round(np.clip(pixel[1], 0, depth_m.shape[0] - 1)))
         local_depth = depth_m[max(0, v - 1):min(depth_m.shape[0], v + 2), max(0, u - 1):min(depth_m.shape[1], u + 2)]
-        valid = np.isfinite(local_depth) & (local_depth > self.detector.min_depth_m) & (local_depth < self.detector.max_depth_m)
+        valid = (
+            np.isfinite(local_depth)
+            & (local_depth > self.detector.min_depth_m)
+            & (local_depth < self.detector.max_depth_m)
+        )
         z = float(np.median(local_depth[valid])) if np.any(valid) else float(fallback_depth_m)
         if not np.isfinite(z) or z <= 0.0:
             return None
@@ -677,6 +718,26 @@ class FloorObjectDetectorNode(Node):
             f"confidence={tracked_detection.confidence:.2f} "
             f"center={center_str}"
         )
+
+    def log_candidate_scores(self, detection_frame) -> None:
+        if not bool(self.get_parameter("debug_candidate_scores").value):
+            return
+        if not detection_frame.candidate_scores:
+            return
+        now_ns = self.get_clock().now().nanoseconds
+        if now_ns - self._last_candidate_score_log_ns < self.log_detection_period_ns:
+            return
+        self._last_candidate_score_log_ns = now_ns
+        parts = []
+        for index, item in enumerate(detection_frame.candidate_scores[:3], start=1):
+            bbox = item["bbox"]
+            parts.append(
+                f"#{index} bbox={bbox} total={float(item['score']):.1f} "
+                f"geom={float(item['geometry']):.2f} color={float(item['color']):.2f} "
+                f"edge={float(item['edge']):.2f} center={float(item['center']):.2f} "
+                f"temp={float(item['temporal']):.2f}"
+            )
+        self.get_logger().info("candidate_scores " + " | ".join(parts))
 
     def log_published_outputs(self, tracked_detection, center_str: str) -> None:
         now_ns = self.get_clock().now().nanoseconds
